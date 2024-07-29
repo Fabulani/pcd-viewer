@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>PCD viewer</title>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=yes, initial-scale=1.0"
+    />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { PCDLoader } from "three/addons/loaders/PCDLoader.js";
+      import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+
+      const vtxShader = `
+        varying float vX;
+        varying float vY;
+        varying float vZ;
+        uniform float size;
+        uniform float marginMinZ;
+        uniform float marginMaxZ;
+
+        void main() {
+          vX = position.x;
+          vY = position.y;
+          vZ = position.z;
+          gl_PointSize = size;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `;
+
+      const fragShader = `
+        varying float vX;
+        varying float vY;
+        varying float vZ;
+      	uniform bool enableFilterX;
+      	uniform bool enableFilterY;
+      	uniform bool enableFilterZ;
+        uniform float marginMinX;
+        uniform float marginMaxX;
+        uniform float marginMinY;
+        uniform float marginMaxY;
+        uniform float marginMinZ;
+        uniform float marginMaxZ;
+
+        void main() {
+          // Calculate normalization value for cloud coloring according to Z-value
+          float normalizedZ = (vZ - marginMinZ) / (marginMaxZ - marginMinZ);
+          float r = normalizedZ;
+
+          // Filter out ground and roof planes
+          if (enableFilterZ == true && (vZ < marginMinZ || vZ > marginMaxZ)) {
+            discard;
+          }
+
+          // Filter XY points
+          if (enableFilterX == true && (vX < marginMinX || vX > marginMaxX)) {
+            discard;
+          }
+          if (enableFilterY == true && (vY < marginMinY || vY > marginMaxY)) {
+            discard;
+          }
+
+          gl_FragColor = vec4(r, 1.0 - r, 1.0 - r, 1.);
+        }
+      `;
+
+      let camera, scene, renderer;
+
+      init();
+      render();
+
+      let selectedDataset = "sp1f";
+
+      // Pre-defined margins for each POI from my thesis. Works only with default rotation.
+      const cloudMargins = {
+        sp1f: {
+          global: {
+            x: [-50, 50],
+            y: [-50, 50],
+            z: [1.1, 3],
+          },
+          entrance: {
+            x: [-1.9, 15.3],
+            y: [7, 50],
+            z: [1.1, 3],
+          },
+          elevator: {
+            x: [-11, -1.2],
+            y: [-1, 6.5],
+            z: [1.1, 3],
+          },
+          glassDoors1: {
+            x: [-16, -7],
+            y: [8, 14],
+            z: [1.1, 3],
+          },
+          glassDoors2: {
+            x: [5, 20],
+            y: [-11, -1],
+            z: [1.1, 3],
+          },
+          glassDoors3: {
+            x: [-21, -12],
+            y: [-4, 3.5],
+            z: [1.1, 3],
+          },
+        },
+      };
+
+      function init() {
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        scene = new THREE.Scene();
+
+        camera = new THREE.PerspectiveCamera(
+          30,
+          window.innerWidth / window.innerHeight,
+          0.01,
+          300
+        );
+
+        camera.position.set(0, 0, 50);
+        scene.add(camera);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.addEventListener("change", render); // use if there is no animation loop
+
+        const loader = new PCDLoader();
+        loader.load("./pcd/sp1f/GlobalMap.pcd", function (points) {
+          points.geometry.rotateZ((3 / 4) * Math.PI);
+          points.geometry.center();
+
+          let defaultX = cloudMargins[selectedDataset].global.x;
+          let defaultY = cloudMargins[selectedDataset].global.y;
+          let defaultZ = cloudMargins[selectedDataset].global.z;
+
+          const material = new THREE.ShaderMaterial({
+            vertexShader: vtxShader,
+            fragmentShader: fragShader,
+            uniforms: {
+              size: { value: 1.5 },
+              enableFilterX: { value: true },
+              enableFilterY: { value: true },
+              enableFilterZ: { value: true },
+              marginMinX: { value: defaultX[0] },
+              marginMaxX: { value: defaultX[1] },
+              marginMinY: { value: defaultY[0] },
+              marginMaxY: { value: defaultY[1] },
+              marginMinZ: { value: defaultZ[0] },
+              marginMaxZ: { value: defaultZ[1] },
+            },
+          });
+
+          points.material = material;
+
+          scene.add(points);
+
+          let rotateClockwise = () => {
+            points.geometry.rotateZ(-Math.PI / 4);
+            render();
+          };
+
+          let rotateAntiClockwise = () => {
+            points.geometry.rotateZ(Math.PI / 4);
+            render();
+          };
+
+          const gui = new GUI();
+
+          const guiOptions = {
+            lockPolar: false,
+            lockAzimuth: false,
+            selectedArea: "global",
+            rotateClockwise: rotateClockwise,
+            rotateAntiClockwise: rotateAntiClockwise,
+          };
+
+          const folderGeneral = gui.addFolder("General");
+          const folderX = gui.addFolder("X axis");
+          const folderY = gui.addFolder("Y axis");
+          const folderZ = gui.addFolder("Z axis");
+
+          folderGeneral
+            .add(points.material.uniforms.size, "value", 0.1, 5)
+            .name("Point size")
+            .onChange(render);
+          folderGeneral
+            .add(guiOptions, "lockPolar")
+            .name("Lock polar angle")
+            .onChange((value) => {
+              if (value == true) {
+                let polarAngle = controls.getPolarAngle();
+                controls.minPolarAngle = polarAngle;
+                controls.maxPolarAngle = polarAngle;
+              } else {
+                controls.minPolarAngle = 0;
+                controls.maxPolarAngle = Math.PI;
+              }
+              render();
+            });
+          folderGeneral
+            .add(guiOptions, "lockAzimuth")
+            .name("Lock azimuthal angle")
+            .onChange((value) => {
+              if (value == true) {
+                let azimuthalAngle = controls.getAzimuthalAngle();
+                controls.minAzimuthAngle = azimuthalAngle;
+                controls.maxAzimuthAngle = azimuthalAngle;
+              } else {
+                controls.minAzimuthAngle = 0;
+                controls.maxAzimuthAngle = Infinity;
+              }
+              render();
+            });
+          folderGeneral
+            .add(
+              guiOptions,
+              "selectedArea",
+              Object.keys(cloudMargins[selectedDataset])
+            )
+            .name("Selected area")
+            .onChange((value) => {
+              points.material.uniforms.marginMinX.value =
+                cloudMargins[selectedDataset][value].x[0];
+              points.material.uniforms.marginMaxX.value =
+                cloudMargins[selectedDataset][value].x[1];
+              points.material.uniforms.marginMinY.value =
+                cloudMargins[selectedDataset][value].y[0];
+              points.material.uniforms.marginMaxY.value =
+                cloudMargins[selectedDataset][value].y[1];
+              points.material.uniforms.marginMinZ.value =
+                cloudMargins[selectedDataset][value].z[0];
+              points.material.uniforms.marginMaxZ.value =
+                cloudMargins[selectedDataset][value].z[1];
+              render();
+            });
+          folderGeneral
+            .add(guiOptions, "rotateClockwise")
+            .name("Rotate clockwise");
+          folderGeneral
+            .add(guiOptions, "rotateAntiClockwise")
+            .name("Rotate anti-clockwise");
+          folderX
+            .add(points.material.uniforms.enableFilterX, "value")
+            .name("Enable X filter")
+            .onChange(render);
+          folderY
+            .add(points.material.uniforms.enableFilterY, "value")
+            .name("Enable Y filter")
+            .onChange(render);
+          folderZ
+            .add(points.material.uniforms.enableFilterZ, "value")
+            .name("Enable Z filter")
+            .onChange(render);
+          folderX
+            .add(points.material.uniforms.marginMinX, "value", -50, 50, 0.1)
+            .name("X min")
+            .onChange(render);
+          folderX
+            .add(points.material.uniforms.marginMaxX, "value", -50, 50, 0.1)
+            .name("X max")
+            .onChange(render);
+          folderY
+            .add(points.material.uniforms.marginMinY, "value", -50, 50, 0.1)
+            .name("Y min")
+            .onChange(render);
+          folderY
+            .add(points.material.uniforms.marginMaxY, "value", -50, 50, 0.1)
+            .name("Y max")
+            .onChange(render);
+          folderZ
+            .add(points.material.uniforms.marginMinZ, "value", -3, 2, 0.1)
+            .name("Z min")
+            .onChange(render);
+          folderZ
+            .add(points.material.uniforms.marginMaxZ, "value", 1, 8, 0.1)
+            .name("Z max")
+            .onChange(render);
+          gui.open();
+
+          //
+
+          render();
+        });
+
+        window.addEventListener("resize", onWindowResize);
+      }
+
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        render();
+      }
+
+      function render() {
+        renderer.render(scene, camera);
+      }
+    </script>
+  </body>
+</html>
