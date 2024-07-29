@@ -1,2 +1,2 @@
 # pcd-viewer
-Web app for visualizing PCD files in real-time with some filtering capabilities.
+Web app for visualizing and filtering PCD files in real-time.
